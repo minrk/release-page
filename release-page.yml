@@ -13,3 +13,4 @@ repos:
   - jupyter/jupyter_console
   - jupyter/jupyterhub
   - jupyter/configurable-http-proxy
+  - zeromq/pyzmq
