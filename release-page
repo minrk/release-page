@@ -1,0 +1,226 @@
+#!/usr/bin/env python
+
+from datetime import datetime, tzinfo, timedelta
+import os
+
+import git
+import re
+
+# webapp
+import jinja2
+from tornado.httpserver import HTTPServer
+from tornado.log import app_log
+from tornado.ioloop import IOLoop, PeriodicCallback
+from tornado.web import RequestHandler, Application
+
+
+join = os.path.join
+
+working = "/tmp/release-info"
+repos = [
+    'ipython/ipython_genutils',
+    'ipython/traitlets',
+    'ipython/ipython',
+    'ipython/ipykernel',
+    'ipython/ipyparallel',
+    'ipython/ipywidgets',
+    'jupyter/jupyter_core',
+    'jupyter/jupyter_client',
+    'jupyter/notebook',
+    'jupyter/nbconvert',
+    'jupyter/qtconsole',
+    'jupyter/jupyter_console',
+    'jupyter/jupyterhub',
+    'jupyter/configurable-http-proxy',
+]
+
+# regex for `git-describe`
+describe_pat = re.compile(r'(.*?)(\-(\d+)\-g([0-9a-f]+))?$')
+
+def repo_name(repo):
+    "/path/to/jupyter/foo/.git => jupyter/foo"
+    return '/'.join(repo.git_dir.split('/')[-3:-1])
+
+def ref_name(ref):
+    "origin/master => master"
+    return ref.name.split('/', 1)[1]
+
+class _tz_dict(dict):
+    """A defaultdict containing datetime tzinfo objects from integer-second offsets."""
+    def __getitem__(self, offset):
+        if offset not in self:
+            aoffset = abs(offset)
+            h = aoffset // 3600
+            m = (aoffset % 3600) // 60
+            # this is backwards because tzoffset is the reverse of tz representation
+            s = '+' if offset <= 0 else '-'
+            class TZ(tzinfo):
+                def __repr__(self):
+                    return "TZ(%s%02i:%02i)" % (s, h, m)
+                
+                def utcoffset(self, dt):
+                    return timedelta(seconds=offset)
+                
+                def dst(self, dt):
+                    return timedelta(minutes=0)
+            self[offset] = TZ()
+        return super().__getitem__(offset)
+
+_tzinfos = _tz_dict()
+
+def commit_date(commit):
+    """Return tz-aware datetime object from commit"""
+    tz = _tzinfos[commit.author_tz_offset]
+    return datetime.fromtimestamp(commit.authored_date, tz)
+
+tfmt = "%Y-%m-%d %H:%M:%S %z"
+
+def dirty(repo, ref, tag, commits):
+    """Produce report dict for dirty branch"""
+    td = commit_date(tag.commit)
+    ref_date = commit_date(ref.commit)
+    return {
+        'repo': repo_name(repo),
+        'ref': ref_name(ref),
+        'commits': commits,
+        'tag': tag.name,
+        'tag_date': td,
+        'ref_date': ref_date,
+        'days': (ref_date - td).days
+    }
+
+def clean(repo, ref, tag):
+    """Produce report dict for a branch that has been released."""
+    td = commit_date(tag.commit)
+    return {
+        'repo': repo_name(repo),
+        'ref': ref_name(ref),
+        'commits': 0,
+        'tag': tag.name,
+        'tag_date': td,
+        'ref_date': td,
+        'days': 0,
+    }
+
+def format_date(dt):
+    """Simple short date format"""
+    now = datetime.utcnow()
+    today = now.date()
+    date = dt.date()
+    delta = today - date
+    days = delta.days
+    if date > today:
+        return "In the future somehow"
+    if date == today:
+        return "today"
+    elif date + timedelta(days=1) == today:
+        return "yesterday"
+    elif date + timedelta(days=14) >= today:
+        return "%i days ago" % days
+    elif date + timedelta(days=60) >= today:
+        return "%i weeks ago" % (days // 7)
+    elif date + timedelta(days=700) >= today:
+        return "%i months ago" % (days // 30)
+    else:
+        return "%i years ago" % ((days + 150) // 365)
+
+
+def summarize_branch(repo, ref):
+    """Summarize a branch of a repo"""
+    app_log.info("Summarizing %s:%s" % (repo_name(repo), ref_name(ref)))
+    try:
+        desc = repo.git.describe(ref, '--tags', '--abbrev=99')
+    except git.GitCommandError as e:
+        return None
+    match = describe_pat.match(desc)
+    name = ref.name.split('/', 1)[1]
+    tagname = match.group(1)
+    tag = repo.tags[tagname]
+    scommits = match.group(3)
+    ncommits = 0 if scommits is None else int(scommits)
+    if ncommits <= 1:
+        # assume 1 commit is back-to-dev version bump, treat it as clean
+        return clean(repo, ref, tag)
+    else:
+        return dirty(repo, ref, tag, ncommits)
+
+
+def summary(project):
+    """Get the summary of a project on GitHub
+    
+    Parameters
+    ----------
+    
+    project: 'org/repo' string
+    
+    Returns
+    -------
+    
+    list of dicts summarizing the state of each branch.
+    """
+    url = 'https://github.com/%s' % project
+    path = join(working, project)
+    if not os.path.exists(path):
+        app_log.info("Cloning %s to %s" % (url, path))
+        r = git.Repo.clone_from(url, path)
+    else:
+        r = git.Repo(path)
+        app_log.info("Updating %s" % (path))
+        r.remote().fetch()
+    infos = []
+    for ref in r.remote().refs:
+        if ref.name.endswith(('/HEAD', '/gh-pages')):
+            continue
+        info = summarize_branch(r, ref)
+        if not info:
+            app_log.warn("No info for %s:%s", repo_name(r), ref_name(ref))
+        else:
+            infos.append(info)
+    infos = sorted(infos, key=lambda info: info['ref_date'], reverse=True)
+    return infos
+
+def update(data):
+    """Callback for updating repo data. Called every interval."""
+    for project in repos:
+        data[project] = summary(project)
+
+
+class RenderHandler(RequestHandler):
+    """Handler for rendering summary of form info as a page."""
+    def initialize(self, data, env):
+        self.data = data
+        self.env = env
+    
+    def get(self):
+        template = self.env.get_template('release.html')
+
+        repos = sorted(
+            [ (name, branches) for name, branches in self.data.items()],
+            key=lambda item: max(info['commits'] for info in item[1]), reverse=True,
+        )
+        html = template.render(repos=repos)
+        self.finish(html)
+
+if __name__ == '__main__':
+    from tornado.options import define, options, parse_command_line
+    define("port", default=8888, help="run on the given port", type=int)
+    define("interval", default=300, help="interval (seconds) to refresh", type=int)
+    
+    parse_command_line()
+    
+    loader = jinja2.FileSystemLoader('.')
+    env = jinja2.Environment(loader=loader, autoescape=True)
+    env.filters['format_date'] = format_date
+    
+    data = {}
+    app_log.info("initializing data")
+    update(data)
+    loop = IOLoop.instance()
+    pc = PeriodicCallback(lambda : update(data), options.interval * 1e3)
+    pc.start()
+    app = Application([
+        ('/', RenderHandler, dict(data=data, env=env))
+    ])
+    server = HTTPServer(app)
+    server.listen(options.port)
+    loop.start()

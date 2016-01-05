@@ -1,0 +1,67 @@
+<html>
+<head>
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css"/>
+
+  <style type="text/css">
+  div.footer {
+    text-align: center;
+    font-size: 80%;
+    color: #666;
+    margin-top: 32px;
+  }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="row heading">
+      <h1>Release Page</h1>
+      <p>
+        A quick summary of how much unreleased code we have on our repos
+      </p>
+    </div>
+    {% for repo, branches in repos %}
+    <div class="row">
+      <h3 id='{{repo}}'><a href='https://github/{{repo}}'>{{repo}}</a></h3>
+    </div>
+    <div class="row">
+      <table id="{{repo}}-table" class="table table-bordered table-striped">
+        <thead>
+          <tr>
+            <th class="col-xs-1">branch</th>
+            <th class="col-xs-1">release</th>
+            <th class="col-xs-1">date</th>
+            <th class="col-xs-1">unreleased commits</th>
+            <th class="col-xs-1">last commit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for info in branches %}
+          {# exclude up-to-date branches other than master #}
+          {% if info['commits'] or info['ref'] == 'master' %}
+          <tr>
+            <td><a href="https://github.com/{{repo}}/tree/{{info['ref']}}">
+              {{info['ref']}}
+            </a></td>
+            <td><a href="https://github.com/{{repo}}/releases/{{info['tag']}}">
+              {{info['tag']}}
+            </a></td>
+            <td>{{info['tag_date'] | format_date}}</td>
+            <td><a href="https://github.com/{{repo}}/compare/{{info['tag']}}...{{info['ref']}}">
+              {{info['commits']}}
+            </a></td>
+            <td>{{info['ref_date'] | format_date}}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+    <div class="footer row">
+      <p>
+        <a href="https://github.com/minrk/release-page">Release Page</a> is &copy; Min RK and MIT Licensed
+      </p>
+    </div>
+  </div>
+</body>
+</html>
