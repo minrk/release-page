@@ -1,0 +1,15 @@
+repos:
+  - ipython/ipython_genutils
+  - ipython/traitlets
+  - ipython/ipython
+  - ipython/ipykernel
+  - ipython/ipyparallel
+  - ipython/ipywidgets
+  - jupyter/jupyter_core
+  - jupyter/jupyter_client
+  - jupyter/notebook
+  - jupyter/nbconvert
+  - jupyter/qtconsole
+  - jupyter/jupyter_console
+  - jupyter/jupyterhub
+  - jupyter/configurable-http-proxy

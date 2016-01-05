@@ -1,38 +1,28 @@
 #!/usr/bin/env python
+"""
+release-page service
 
+edit repo list in release-page.yml to create your own page.
+"""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, tzinfo, timedelta
 import os
+import re
 
 import git
-import re
+import yaml
 
 # webapp
 import jinja2
 from tornado.httpserver import HTTPServer
+from tornado.gen import coroutine
 from tornado.log import app_log
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.web import RequestHandler, Application
 
-
 join = os.path.join
 
-working = "/tmp/release-info"
-repos = [
-    'ipython/ipython_genutils',
-    'ipython/traitlets',
-    'ipython/ipython',
-    'ipython/ipykernel',
-    'ipython/ipyparallel',
-    'ipython/ipywidgets',
-    'jupyter/jupyter_core',
-    'jupyter/jupyter_client',
-    'jupyter/notebook',
-    'jupyter/nbconvert',
-    'jupyter/qtconsole',
-    'jupyter/jupyter_console',
-    'jupyter/jupyterhub',
-    'jupyter/configurable-http-proxy',
-]
+cfg_file = 'release-page.yml'
 
 # regex for `git-describe`
 describe_pat = re.compile(r'(.*?)(\-(\d+)\-g([0-9a-f]+))?$')
@@ -145,7 +135,7 @@ def summarize_branch(repo, ref):
         return dirty(repo, ref, tag, ncommits)
 
 
-def summary(project):
+def summary(project, workdir):
     """Get the summary of a project on GitHub
     
     Parameters
@@ -159,7 +149,7 @@ def summary(project):
     list of dicts summarizing the state of each branch.
     """
     url = 'https://github.com/%s' % project
-    path = join(working, project)
+    path = join(workdir, project)
     if not os.path.exists(path):
         app_log.info("Cloning %s to %s" % (url, path))
         r = git.Repo.clone_from(url, path)
@@ -179,10 +169,10 @@ def summary(project):
     infos = sorted(infos, key=lambda info: info['ref_date'], reverse=True)
     return infos
 
-def update(data):
+def update(data, repo, workdir):
     """Callback for updating repo data. Called every interval."""
     for project in repos:
-        data[project] = summary(project)
+        data[project] = summary(project, workdir)
 
 
 class RenderHandler(RequestHandler):
@@ -205,22 +195,37 @@ if __name__ == '__main__':
     from tornado.options import define, options, parse_command_line
     define("port", default=8888, help="run on the given port", type=int)
     define("interval", default=300, help="interval (seconds) to refresh", type=int)
+    define("workdir", default='/tmp/release-page', help="path to clone repos", type=str)
     
     parse_command_line()
+    
+    with open(cfg_file) as f:
+        cfg = yaml.load(f)
+    repos = cfg['repos']
     
     loader = jinja2.FileSystemLoader('.')
     env = jinja2.Environment(loader=loader, autoescape=True)
     env.filters['format_date'] = format_date
     
     data = {}
-    app_log.info("initializing data")
-    update(data)
+    
+    executor = ThreadPoolExecutor(1)
+    @coroutine
+    def do_update():
+        app_log.info("Updating data")
+        yield executor.submit(lambda : update(data, repos, options.workdir))
+        app_log.info("Data updated")
+    
+    
     loop = IOLoop.instance()
-    pc = PeriodicCallback(lambda : update(data), options.interval * 1e3)
+    # schedule initial data load
+    loop.add_callback(do_update)
+    pc = PeriodicCallback(do_update, options.interval * 1e3)
     pc.start()
     app = Application([
         ('/', RenderHandler, dict(data=data, env=env))
     ])
     server = HTTPServer(app)
     server.listen(options.port)
+    app_log.info("Listening on :%i", options.port)
     loop.start()
