@@ -158,6 +158,8 @@ def summary(project, workdir):
         app_log.info("Updating %s" % (path))
         r.remote().fetch()
     infos = []
+    # prune deleted remote branches
+    r.git.remote('prune', *r.remotes)
     for ref in r.remote().refs:
         if ref.name.endswith(('/HEAD', '/gh-pages')):
             continue
