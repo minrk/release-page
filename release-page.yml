@@ -13,4 +13,8 @@ repos:
   - jupyter/jupyter_console
   - jupyter/jupyterhub
   - jupyter/configurable-http-proxy
+  - jupyter/dockerspawner
+  - jupyter/sudospawner
+  - jupyter/oauthenticator
+  - jupyter/nbgrader
   - zeromq/pyzmq
