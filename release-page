@@ -114,13 +114,13 @@ def format_date(dt):
     else:
         return "%i years ago" % ((days + 150) // 365)
 
-
 def summarize_branch(repo, ref):
     """Summarize a branch of a repo"""
     app_log.info("Summarizing %s:%s" % (repo_name(repo), ref_name(ref)))
     try:
         desc = repo.git.describe(ref, '--tags', '--abbrev=99')
     except git.GitCommandError as e:
+        # never released
         return None
     match = describe_pat.match(desc)
     name = ref.name.split('/', 1)[1]
@@ -169,6 +169,8 @@ def summary(project, workdir):
         else:
             infos.append(info)
     infos = sorted(infos, key=lambda info: info['ref_date'], reverse=True)
+    if not infos:
+        app_log.warning("No releases for %s", project)
     return infos
 
 def update(data, repo, workdir):
@@ -185,10 +187,15 @@ class RenderHandler(RequestHandler):
     
     def get(self):
         template = self.env.get_template('release.html')
+        def sort_key(item):
+            if not item[1]: # no releases
+                return -1
+            return max(info['commits'] for info in item[1])
 
         repos = sorted(
-            [ (name, branches) for name, branches in self.data.items()],
-            key=lambda item: max(info['commits'] for info in item[1]), reverse=True,
+            [ (name, branches) for name, branches in self.data.items() ],
+            key=sort_key,
+            reverse=True,
         )
         html = template.render(repos=repos)
         self.finish(html)
