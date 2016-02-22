@@ -58,6 +58,9 @@ class _tz_dict(dict):
 
 _tzinfos = _tz_dict()
 
+def utcnow():
+    return datetime.utcnow().replace(tzinfo=_tzinfos[0])
+
 def commit_date(commit):
     """Return tz-aware datetime object from commit"""
     tz = _tzinfos[commit.author_tz_offset]
@@ -94,14 +97,21 @@ def clean(repo, ref, tag):
 
 def format_date(dt):
     """Simple short date format"""
-    now = datetime.utcnow()
+    now = utcnow()
     today = now.date()
     date = dt.date()
-    delta = today - date
-    days = delta.days
-    if date > today:
+    delta = now - dt
+    day_delta = today - date
+    days = day_delta.days
+    seconds = delta.total_seconds()
+    if dt > now:
+        print("???Future: %s, %s???" % (dt, now))
         return "In the future somehow"
-    if date == today:
+    if dt + timedelta(minutes=9) >= now:
+        return "just now"
+    elif dt + timedelta(minutes=90) >= now:
+        return "%i minutes ago" % (seconds // 60)
+    elif date == today:
         return "today"
     elif date + timedelta(days=1) == today:
         return "yesterday"
@@ -113,6 +123,7 @@ def format_date(dt):
         return "%i months ago" % (days // 30)
     else:
         return "%i years ago" % ((days + 150) // 365)
+
 
 def summarize_branch(repo, ref):
     """Summarize a branch of a repo"""
@@ -173,10 +184,11 @@ def summary(project, workdir):
         app_log.warning("No releases for %s", project)
     return infos
 
+
 def update(data, repo, workdir):
     """Callback for updating repo data. Called every interval."""
     for project in repos:
-        data[project] = summary(project, workdir)
+        data['projects'][project] = summary(project, workdir)
 
 
 class RenderHandler(RequestHandler):
@@ -193,11 +205,11 @@ class RenderHandler(RequestHandler):
             return max(info['commits'] for info in item[1])
 
         repos = sorted(
-            [ (name, branches) for name, branches in self.data.items() ],
+            [ (name, branches) for name, branches in self.data['projects'].items() ],
             key=sort_key,
             reverse=True,
         )
-        html = template.render(repos=repos)
+        html = template.render(repos=repos, date=format_date(data['date']))
         self.finish(html)
 
 if __name__ == '__main__':
@@ -216,14 +228,19 @@ if __name__ == '__main__':
     env = jinja2.Environment(loader=loader, autoescape=True)
     env.filters['format_date'] = format_date
     
-    data = {}
+    data = {
+        'projects': {},
+        'date': utcnow(),
+    }
     
     executor = ThreadPoolExecutor(1)
     @coroutine
     def do_update():
+        data['date'] = utcnow()
         app_log.info("Updating data")
         yield executor.submit(lambda : update(data, repos, options.workdir))
         app_log.info("Data updated")
+        data['date'] = utcnow()
     
     
     loop = IOLoop.instance()
