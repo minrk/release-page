@@ -215,7 +215,7 @@ class RenderHandler(RequestHandler):
 if __name__ == '__main__':
     from tornado.options import define, options, parse_command_line
     define("port", default=8888, help="run on the given port", type=int)
-    define("interval", default=300, help="interval (seconds) to refresh", type=int)
+    define("interval", default=3600, help="interval (seconds) to refresh", type=int)
     define("workdir", default='/tmp/release-page', help="path to clone repos", type=str)
     
     parse_command_line()
