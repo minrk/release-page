@@ -5,4 +5,4 @@ build:
 
 run:
 	docker rm -f release-page || true
-	docker run -d -p 80:8888 --name release-page release-page
+	docker run --restart=always -d -p 9009:8888 --name release-page release-page
