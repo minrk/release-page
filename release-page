@@ -10,6 +10,7 @@ import os
 import re
 
 import git
+from github import Github as GitHub # H!
 import yaml
 
 # webapp
@@ -185,10 +186,55 @@ def summary(project, workdir):
     return infos
 
 
-def update(data, repo, workdir):
-    """Callback for updating repo data. Called every interval."""
-    for project in repos:
-        data['projects'][project] = summary(project, workdir)
+class ReleaseChecker(object):
+    def __init__(self, *, workdir='/tmp/release-page', orgs=None, exclude_repos=None, repos=None):
+        self.workdir = workdir
+        self.orgs = orgs or []
+        self.exclude_repos = exclude_repos or []
+        self.repos = repos or []
+
+        self.gh = GitHub(os.getenv('GITHUB_API_TOKEN'))
+        self.executor = ThreadPoolExecutor(2)
+        self.data = {
+            'projects': {},
+            'date': utcnow(),
+        }
+
+    def _update_repo_list(self):
+        for org in map(self.gh.get_organization, self.orgs):
+            app_log.info("Updating repo list for %s", org.login)
+            for repo in org.get_repos():
+                if repo.full_name in self.repos + self.exclude_repos:
+                    app_log.debug("Skipping excluded repo %s", repo.full_name)
+                    continue
+                else:
+                    app_log.debug("Checking for tags in %s", repo.full_name)
+                    # check for tags
+                    try:
+                        next(iter(repo.get_tags()))
+                    except StopIteration:
+                        app_log.info("No tags in %s", repo.full_name)
+                        self.exclude_repos.append(repo.full_name)
+                    else:
+                        app_log.info("Adding %s to repo list", repo.full_name)
+                        self.repos.append(repo.full_name)
+
+    @coroutine
+    def update_repo_list(self):
+        app_log.info("Updating repo list (rate limit: %i/%i)", *self.gh.rate_limiting)
+        yield self.executor.submit(self._update_repo_list)
+        app_log.info("Repo list updated (rate limit %i/%i)", *self.gh.rate_limiting)
+
+    def _update(self):
+        for name in list(self.repos):
+            self.data['projects'][name] = summary(name, self.workdir)
+
+    @coroutine
+    def update(self):
+        app_log.info("Updating data")
+        yield self.executor.submit(self._update)
+        app_log.info("Data updated")
+        self.data['date'] = utcnow()
 
 
 class RenderHandler(RequestHandler):
@@ -216,38 +262,37 @@ if __name__ == '__main__':
     from tornado.options import define, options, parse_command_line
     define("port", default=8888, help="run on the given port", type=int)
     define("interval", default=3600, help="interval (seconds) to refresh", type=int)
+    define("github-interval", default=24 * 3600, help="interval (seconds) to refresh repo list from GitHub", type=int)
     define("workdir", default='/tmp/release-page', help="path to clone repos", type=str)
     
     parse_command_line()
     
     with open(cfg_file) as f:
         cfg = yaml.load(f)
-    repos = cfg['repos']
-    
+
+    checker = ReleaseChecker(workdir=options.workdir, **cfg)
+
     loader = jinja2.FileSystemLoader('.')
     env = jinja2.Environment(loader=loader, autoescape=True)
     env.filters['format_date'] = format_date
-    
-    data = {
-        'projects': {},
-        'date': utcnow(),
-    }
-    
-    executor = ThreadPoolExecutor(1)
-    @coroutine
-    def do_update():
-        data['date'] = utcnow()
-        app_log.info("Updating data")
-        yield executor.submit(lambda : update(data, repos, options.workdir))
-        app_log.info("Data updated")
-        data['date'] = utcnow()
-    
-    
+
+    data = checker.data
+
     loop = IOLoop.instance()
     # schedule initial data load
-    loop.add_callback(do_update)
-    pc = PeriodicCallback(do_update, options.interval * 1e3)
-    pc.start()
+    @coroutine
+    def first_load():
+        # concurrent update & repo-list load,
+        # so we can start cloning while we list repos on orgs
+        futures = [ checker.update(), checker.update_repo_list() ]
+        for f in futures:
+            yield f
+        # update repos one more time after loading the list
+        yield checker.update()
+    loop.add_callback(first_load)
+    # and periodic updates
+    PeriodicCallback(checker.update_repo_list, options.github_interval * 1e3).start()
+    PeriodicCallback(checker.update, options.interval * 1e3).start()
     app = Application([
         ('/', RenderHandler, dict(data=data, env=env))
     ])

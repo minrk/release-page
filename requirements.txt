@@ -1,5 +1,6 @@
-tornado
-PyYAML
 GitPython
 jinja2
+tornado
+PyYAML
+PyGitHub
 futures; python_version < "3.4"
