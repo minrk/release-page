@@ -5,3 +5,7 @@ orgs:
   - jupyterlab
 repos:
   - zeromq/pyzmq
+exclude_repos:
+  # exclude repos that have tags that aren't releases
+  - ipython/ipython-py3k
+  - jupyter/jupyter-drive
