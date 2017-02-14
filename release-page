@@ -28,6 +28,8 @@ cfg_file = 'release-page.yml'
 # regex for `git-describe`
 describe_pat = re.compile(r'(.*?)(\-(\d+)\-g([0-9a-f]+))?$')
 
+version_re = re.compile(r'(v|rel-)?\d+(\.\d+)+', re.IGNORECASE)
+
 def repo_name(repo):
     "/path/to/jupyter/foo/.git => jupyter/foo"
     return '/'.join(repo.git_dir.split('/')[-3:-1])
@@ -210,14 +212,14 @@ class ReleaseChecker(object):
                 else:
                     app_log.debug("Checking for tags in %s", repo.full_name)
                     # check for tags
-                    try:
-                        next(iter(repo.get_tags()))
-                    except StopIteration:
+                    for tag in repo.get_tags():
+                        if version_re.match(tag.name):
+                            app_log.info("Adding %s to repo list", repo.full_name)
+                            self.repos.append(repo.full_name)
+                            break
+                    else:
                         app_log.info("No tags in %s", repo.full_name)
                         self.exclude_repos.append(repo.full_name)
-                    else:
-                        app_log.info("Adding %s to repo list", repo.full_name)
-                        self.repos.append(repo.full_name)
 
     @coroutine
     def update_repo_list(self):
