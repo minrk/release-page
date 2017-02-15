@@ -3,7 +3,7 @@
 A simple service to render a webpage summarizing the release status of a
 collection of repos on GitHub.
 
-[![](static/screenshot.png]
+![Report output](static/screenshot.png "report output")
 
 
 ## Run
