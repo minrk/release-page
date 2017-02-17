@@ -29,7 +29,7 @@ Or run with docker (again, after editing release-page.yml):
 To avoid being rate limited by GitHub, you can use a GitHub token. Copy the
 token to:
 
-    GITHUB_API_VALUE='xxxxxxxxxxxxxxxxxx'
+    GITHUB_API_TOKEN='xxxxxxxxxxxxxxxxxx'
 
 ## Customization
 
